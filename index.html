@@ -674,7 +674,7 @@ button.item{
     </div>
     <div id="opt-gemini" class="stack" style="margin-top:14px" hidden>
       <input type="password" id="gkey" autocomplete="off" placeholder="Tempel kunci API Gemini" aria-label="Kunci API Gemini">
-      <input type="text" id="gmodel" value="gemini-2.5-flash" aria-label="Nama model Gemini">
+      <input type="text" id="gmodel" value="gemini-3.8-flash" aria-label="Nama model Gemini">
       <label class="check"><input type="checkbox" id="gremember"> Ingat kunci di browser ini</label>
       <p class="hint">Belum punya kunci? Buat gratis di <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>. Langkah lengkap ada di Cara pakai.</p>
     </div>
@@ -1283,16 +1283,23 @@ function heurMeta(segs){
   const tags=[...freq.entries()].sort((a,b)=>b[1]-a[1]||b[0].length-a[0].length).slice(0,5).map(([w])=>'#'+w);
   return {title,caption,tags};
 }
+/* Panggil Gemini. Kalau model ditolak karena sudah tidak tersedia dan Google menyarankan model baru, ganti otomatis lalu coba sekali lagi. */
+async function gcall(key,body){
+  let model=$('#gmodel').value.trim()||'gemini-3.8-flash';
+  for(let k=0;k<2;k++){
+    const res=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{
+      method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify(body)});
+    const j=await res.json().catch(()=>({}));
+    if(res.ok) return j;
+    const m=String((j.error&&j.error.message)||''), nx=m.match(/use models\/([\w.\-]+)/i);
+    if(k===0&&nx&&nx[1]!==model){model=nx[1];$('#gmodel').value=model;if($('#gremember').checked)lsSet('klipku.gmodel',model);continue;}
+    throw new Error('Gemini menolak permintaan: '+(m||res.status));
+  }
+}
 async function geminiJSON(prompt){
   const key=$('#gkey').value.trim();
   if(!key) throw new Error('Masukkan kunci API Gemini dulu.');
-  const model=$('#gmodel').value.trim()||'gemini-2.5-flash';
-  const res=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{
-    method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},
-    body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{responseMimeType:'application/json'}})
-  });
-  const j=await res.json().catch(()=>({}));
-  if(!res.ok) throw new Error('Gemini menolak permintaan: '+((j.error&&j.error.message)||res.status));
+  const j=await gcall(key,{contents:[{parts:[{text:prompt}]}],generationConfig:{responseMimeType:'application/json'}});
   const txt=j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts&&j.candidates[0].content.parts[0].text;
   try{return JSON.parse(txt);}catch(e){throw new Error('Jawaban Gemini tidak bisa dibaca. Coba lagi.');}
 }
@@ -1649,15 +1656,9 @@ async function gemini(pcm,offset,say){
   if(!key) throw new Error('Masukkan kunci API Gemini dulu.');
   if(pcm.length>16000*600) throw new Error('Klip terlalu panjang untuk Gemini (maksimal 10 menit per klip).');
   say('Mengirim audio ke Gemini…');
-  const model=$('#gmodel').value.trim()||'gemini-2.5-flash';
   const prompt='Transkripsikan ucapan pada audio ini. Balas HANYA dengan JSON array berisi objek {"start":detik,"end":detik,"text":"..."}. Tiap objek satu kalimat atau frasa pendek (maksimal 12 kata). Waktu dalam detik sejak awal audio. Jangan menambahkan teks yang tidak diucapkan.';
   const data=await blobB64(toWav(pcm,16000));
-  const res=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{
-    method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},
-    body:JSON.stringify({contents:[{parts:[{text:prompt},{inline_data:{mime_type:'audio/wav',data}}]}],generationConfig:{responseMimeType:'application/json'}})
-  });
-  const j=await res.json().catch(()=>({}));
-  if(!res.ok) throw new Error('Gemini menolak permintaan: '+((j.error&&j.error.message)||res.status));
+  const j=await gcall(key,{contents:[{parts:[{text:prompt},{inline_data:{mime_type:'audio/wav',data}}]}],generationConfig:{responseMimeType:'application/json'}});
   const txt=j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts&&j.candidates[0].content.parts[0].text;
   let arr; try{arr=JSON.parse(txt);}catch(e){throw new Error('Jawaban Gemini tidak bisa dibaca. Coba lagi.');}
   return arr.map(x=>({start:offset+Number(x.start||0),end:offset+Number(x.end||0),text:String(x.text||'').trim()})).filter(x=>x.text&&x.end>x.start);
@@ -2295,7 +2296,7 @@ $('#btn-gotoclips').onclick=()=>go('klip-saya');
 (function init(){
   const k=lsGet('klipku.gkey');
   if(k){$('#gkey').value=k;$('#gremember').checked=true;}
-  const gm=lsGet('klipku.gmodel');if(gm)$('#gmodel').value=gm;
+  const gm=lsGet('klipku.gmodel');if(gm&&gm!=='gemini-2.5-flash')$('#gmodel').value=gm;
   S.res=+$('#res').value||720;
   applyMethod();buildStyles();
   const okRec=!!(window.MediaRecorder&&HTMLCanvasElement.prototype.captureStream);
