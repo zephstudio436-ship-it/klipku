@@ -481,7 +481,7 @@ button.item{
         <div class="row" style="margin-top:8px">
           <button class="btn sm" id="btn-meta" type="button">Buat ulang judul &amp; hashtag</button>
         </div>
-        <p class="note">Dengan kunci Gemini, judul dan hashtag ditulis oleh AI. Tanpa itu, dibuat sederhana dari kalimat pembuka dan kata yang paling sering muncul.</p>
+        <p class="note">Dengan kunci API (Gemini, Groq, atau OpenAI), judul dan hashtag ditulis oleh AI. Tanpa itu, dibuat sederhana dari kalimat pembuka dan kata yang paling sering muncul.</p>
       </section>
 
       <section class="panel p-sub" aria-labelledby="h-sub">
@@ -667,10 +667,26 @@ button.item{
   </div>
   <div class="sec">
     <p class="lab">Sumber subtitle</p>
-    <div class="opt-row" data-for="method">
+    <div class="opt-row scroll" data-for="method">
       <button class="opt" type="button" data-v="whisper">Whisper</button>
       <button class="opt" type="button" data-v="gemini">Gemini</button>
+      <button class="opt" type="button" data-v="groq">Groq</button>
+      <button class="opt" type="button" data-v="openai">OpenAI</button>
       <button class="opt" type="button" data-v="manual">Manual</button>
+    </div>
+    <div id="opt-groq" class="stack" style="margin-top:14px" hidden>
+      <input type="password" id="qkey" autocomplete="off" placeholder="Tempel kunci API Groq" aria-label="Kunci API Groq">
+      <input type="text" id="qmodel" value="whisper-large-v3-turbo" list="q-list" aria-label="Model transkripsi Groq">
+      <datalist id="q-list"><option value="whisper-large-v3-turbo"><option value="whisper-large-v3"></datalist>
+      <label class="check"><input type="checkbox" id="qremember"> Ingat kunci di browser ini</label>
+      <p class="hint">Buat kunci di <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>. Groq sangat cepat untuk Whisper dan punya jatah gratis.</p>
+    </div>
+    <div id="opt-openai" class="stack" style="margin-top:14px" hidden>
+      <input type="password" id="okey" autocomplete="off" placeholder="Tempel kunci API OpenAI" aria-label="Kunci API OpenAI">
+      <input type="text" id="omodel" value="whisper-1" list="o-list" aria-label="Model transkripsi OpenAI">
+      <datalist id="o-list"><option value="whisper-1"></datalist>
+      <label class="check"><input type="checkbox" id="oremember"> Ingat kunci di browser ini</label>
+      <p class="hint">Buat kunci di <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a>. Berbayar, butuh saldo. Pakai model whisper-1 karena menghasilkan waktu per kalimat.</p>
     </div>
     <div id="opt-gemini" class="stack" style="margin-top:14px" hidden>
       <input type="password" id="gkey" autocomplete="off" placeholder="Tempel kunci API Gemini" aria-label="Kunci API Gemini">
@@ -701,6 +717,7 @@ button.item{
       <li>Tempel kunci di kolom yang tersedia. Centang <b>Ingat kunci di browser ini</b> kalau tidak mau menempel lagi.</li>
       <li>Selesai. Buat subtitle lagi, dan sekarang memakai Gemini.</li>
     </ol>
+    <p><b>Pilihan lain:</b> kamu juga bisa memakai kunci <b>Groq</b> (gratis dan sangat cepat, buat di console.groq.com/keys) atau <b>OpenAI</b> (berbayar, platform.openai.com/api-keys). Pilih di Pengaturan, bagian Sumber subtitle, lalu tempel kunci seperti langkah di atas.</p>
     <p><b>Perlu diketahui:</b> kunci itu milikmu pribadi, jangan dibagikan ke orang lain atau ditempel di tempat umum. Pemakaian dihitung di akun Google-mu, ada jatah gratis dengan batas harian yang bisa berubah. Audio klip dikirim ke Google untuk diubah jadi teks. Kalau videomu bersifat pribadi, pakai Whisper saja.</p>
   </details>
   <button class="done" type="button" data-close>Mengerti</button>
@@ -1283,17 +1300,69 @@ function heurMeta(segs){
   const tags=[...freq.entries()].sort((a,b)=>b[1]-a[1]||b[0].length-a[0].length).slice(0,5).map(([w])=>'#'+w);
   return {title,caption,tags};
 }
+const PROV={
+  gemini:{name:'Gemini',key:'#gkey',model:'#gmodel',rem:'#gremember'},
+  groq:{name:'Groq',key:'#qkey',model:'#qmodel',rem:'#qremember',base:'https://api.groq.com/openai/v1',chat:'llama-3.3-70b-versatile'},
+  openai:{name:'OpenAI',key:'#okey',model:'#omodel',rem:'#oremember',base:'https://api.openai.com/v1',chat:'gpt-4o-mini'}
+};
+const keyOf=id=>PROV[id]?$(PROV[id].key).value.trim():'';
+const metaProv=()=>[CFG.method,'gemini','groq','openai'].find(id=>PROV[id]&&keyOf(id))||null;
+const metaJSON=(id,prompt)=>id==='gemini'?geminiJSON(prompt):llmJSON(id,prompt);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+/* Panggilan ke API yang kompatibel dengan OpenAI (Groq, OpenAI), dengan coba ulang saat sedang ramai. */
+async function ocall(id,path,init){
+  const P=PROV[id],key=keyOf(id);
+  if(!key) throw new Error('Masukkan kunci API '+P.name+' dulu.');
+  const wait=[5,10,20];let tries=0;
+  for(;;){
+    const res=await fetch(P.base+path,Object.assign({},init,{headers:Object.assign({Authorization:'Bearer '+key},init.headers||{})}));
+    const j=await res.json().catch(()=>({}));
+    if(res.ok) return j;
+    const m=String((j.error&&j.error.message)||'');
+    if(res.status===401) throw new Error('Kunci API '+P.name+' tidak valid. Periksa lagi kuncinya.');
+    const busy=(res.status===429||res.status===503||/overloaded|try again/i.test(m))&&!/quota|billing|credit/i.test(m);
+    if(busy&&tries<wait.length){const d=wait[tries++];for(let r=d;r>0;r--){msg('#tr-msg',P.name+' sedang sibuk. Mencoba lagi dalam '+r+' detik… ('+tries+' dari '+wait.length+')');await sleep(1000);}continue;}
+    throw new Error(P.name+' menolak permintaan: '+(m||res.status));
+  }
+}
+async function llmJSON(id,prompt){
+  const j=await ocall(id,'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({model:PROV[id].chat,messages:[{role:'user',content:prompt}],response_format:{type:'json_object'}})});
+  const txt=j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content;
+  try{return JSON.parse(txt);}catch(e){throw new Error('Jawaban '+PROV[id].name+' tidak bisa dibaca. Coba lagi.');}
+}
+async function openaiTrans(id,pcm,offset,say){
+  const P=PROV[id];
+  if(!keyOf(id)) throw new Error('Masukkan kunci API '+P.name+' dulu.');
+  if(pcm.length>16000*600) throw new Error('Klip terlalu panjang (maksimal 10 menit per klip).');
+  say('Mengirim audio ke '+P.name+'…');
+  const fd=new FormData();
+  fd.append('file',toWav(pcm,16000),'klip.wav');
+  fd.append('model',$(P.model).value.trim()||(id==='groq'?'whisper-large-v3-turbo':'whisper-1'));
+  fd.append('response_format','verbose_json');fd.append('timestamp_granularities[]','segment');fd.append('temperature','0');
+  const lg={indonesian:'id',english:'en'}[CFG.wlang];if(lg) fd.append('language',lg);
+  const j=await ocall(id,'/audio/transcriptions',{method:'POST',body:fd});
+  let segs=(j.segments||[]).map(x=>({start:offset+Number(x.start||0),end:offset+Number(x.end||0),text:String(x.text||'').trim()}));
+  if(!segs.length&&j.text) segs=[{start:offset,end:offset+pcm.length/16000,text:String(j.text).trim()}];
+  return segs.filter(x=>x.text&&x.end>x.start);
+}
 /* Panggil Gemini. Kalau model ditolak karena sudah tidak tersedia dan Google menyarankan model baru, ganti otomatis lalu coba sekali lagi. */
 async function gcall(key,body){
-  let model=$('#gmodel').value.trim()||'gemini-3.8-flash';
-  for(let k=0;k<2;k++){
+  let model=$('#gmodel').value.trim()||'gemini-3.8-flash',swapped=false,wait=[5,10,20],tries=0;
+  for(;;){
     const res=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{
       method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify(body)});
     const j=await res.json().catch(()=>({}));
     if(res.ok) return j;
     const m=String((j.error&&j.error.message)||''), nx=m.match(/use models\/([\w.\-]+)/i);
-    if(k===0&&nx&&nx[1]!==model){model=nx[1];$('#gmodel').value=model;if($('#gremember').checked)lsSet('klipku.gmodel',model);continue;}
-    throw new Error('Gemini menolak permintaan: '+(m||res.status));
+    if(!swapped&&nx&&nx[1]!==model){swapped=true;model=nx[1];$('#gmodel').value=model;if($('#gremember').checked)lsSet('klipku.model.gemini',model);continue;}
+    const busy=(res.status===503||res.status===429||/high demand|overloaded|try again later|unavailable/i.test(m))&&!/quota|billing|rate limit exceeded/i.test(m);
+    if(busy&&tries<wait.length){
+      const d=wait[tries++];
+      for(let r=d;r>0;r--){msg('#tr-msg','Gemini sedang ramai. Mencoba lagi dalam '+r+' detik… ('+tries+' dari '+wait.length+')');await new Promise(x=>setTimeout(x,1000));}
+      msg('#tr-msg','Mencoba Gemini lagi…');continue;
+    }
+    throw new Error('Gemini menolak permintaan: '+(m||res.status)+(busy?' Sudah dicoba '+tries+' kali. Tunggu beberapa menit lalu coba lagi, atau ganti ke Whisper di Pengaturan.':''));
   }
 }
 async function geminiJSON(prompt){
@@ -1307,10 +1376,11 @@ async function makeMeta(c){
   const segs=S.segs.filter(g=>g.end>c.start&&g.start<c.end);
   if(!segs.length) return null;
   const heur=heurMeta(segs);
-  if($('#gkey').value.trim()){
+  const mp=metaProv();
+  if(mp){
     try{
       const text=segs.map(g=>g.text).join(' ').slice(0,6000);
-      const j=await geminiJSON('Berikut transkrip sebuah klip video pendek. Buat judul menarik (maksimal 60 karakter), caption singkat (maksimal 2 kalimat, 150 karakter), dan 5 hashtag yang relevan. Pakai bahasa yang sama dengan transkrip. Balas HANYA JSON: {"title":"...","caption":"...","hashtags":["#a","#b"]}.\n\nTranskrip:\n'+text);
+      const j=await metaJSON(mp,'Berikut transkrip sebuah klip video pendek. Buat judul menarik (maksimal 60 karakter), caption singkat (maksimal 2 kalimat, 150 karakter), dan 5 hashtag yang relevan. Pakai bahasa yang sama dengan transkrip. Balas HANYA JSON: {"title":"...","caption":"...","hashtags":["#a","#b"]}.\n\nTranskrip:\n'+text);
       return {title:cut(String(j.title||heur.title),80),caption:cut(String(j.caption||heur.caption),200),
         tags:parseTags((j.hashtags||[]).join(' ')).length?parseTags((j.hashtags||[]).join(' ')):heur.tags};
     }catch(e){/* jatuh ke cara sederhana */}
@@ -1668,7 +1738,7 @@ async function transcribeRange(a,b,say){
   if(method==='manual') throw new Error('Mode manual: impor SRT atau tambah baris subtitle sendiri.');
   say('Menyiapkan audio…');
   const pcm=await getPCM(a,b);
-  const segs=method==='whisper'?await whisper(pcm,a,say):await gemini(pcm,a,say);
+  const segs=method==='whisper'?await whisper(pcm,a,say):method==='gemini'?await gemini(pcm,a,say):await openaiTrans(method,pcm,a,say);
   S.segs=S.segs.filter(g=>g.end<=a||g.start>=b).concat(segs);sortSegs();
   renderSegs();redrawAll();
 }
@@ -1797,20 +1867,16 @@ $('#btn-play').onclick=()=>{if(!S.url)return;if(!src.paused){src.pause();return;
 ['play','pause','ended'].forEach(ev=>src.addEventListener(ev,()=>{$('#btn-play').textContent=src.paused?'▶ Putar':'⏸ Jeda';}));
 $('#scrub').oninput=e=>{if(S.url){src.currentTime=S.start+(+e.target.value);redraw();}};
 
-const ENG={whisper:'Whisper di browser',gemini:'Gemini (kunci API)',manual:'Manual / impor SRT'};
+const ENG={whisper:'Whisper di browser',gemini:'Gemini (kunci API)',groq:'Groq (kunci API)',openai:'OpenAI (kunci API)',manual:'Manual / impor SRT'};
 function applyMethod(){
   const m=CFG.method;
-  $('#opt-whisper').hidden=m!=='whisper';$('#opt-gemini').hidden=m!=='gemini';
+  $('#opt-whisper').hidden=m!=='whisper';$('#opt-gemini').hidden=m!=='gemini';$('#opt-groq').hidden=m!=='groq';$('#opt-openai').hidden=m!=='openai';
   $('#opt-lang').hidden=m==='manual';
   $('#eng-name').textContent=ENG[m]||m;
 }
 $('#btn-eng').onclick=()=>{syncOpts();showSheet('#sh-atur');};
-$('#gremember').onchange=()=>{
-  if($('#gremember').checked){lsSet('klipku.gkey',$('#gkey').value);lsSet('klipku.gmodel',$('#gmodel').value);}
-  else{lsDel('klipku.gkey');}
-};
-$('#gkey').onchange=()=>{if($('#gremember').checked) lsSet('klipku.gkey',$('#gkey').value);};
-$('#gmodel').onchange=()=>{if($('#gremember').checked) lsSet('klipku.gmodel',$('#gmodel').value);};
+const saveProv=id=>{const P=PROV[id];if($(P.rem).checked){lsSet('klipku.key.'+id,$(P.key).value);lsSet('klipku.model.'+id,$(P.model).value);}else{lsDel('klipku.key.'+id);if(id==='gemini'){lsDel('klipku.gkey');}}};
+Object.keys(PROV).forEach(id=>{const P=PROV[id],f=()=>{if($(P.rem).checked) saveProv(id);};$(P.rem).onchange=()=>saveProv(id);$(P.key).onchange=f;$(P.model).onchange=f;});
 
 $('#btn-tr').onclick=async()=>{
   if(!S.file){msg('#tr-msg','Pilih video dulu.','bad');return;}
@@ -2270,7 +2336,7 @@ async function runPipeline({file}){
     (async()=>{
       await buildCovers();
       if(S.vtok!==tok) return;
-      const canAuto=$('#autometa').checked&&CFG.method!=='manual'&&!(CFG.method==='gemini'&&!$('#gkey').value.trim());
+      const canAuto=$('#autometa').checked&&CFG.method!=='manual'&&!(PROV[CFG.method]&&!keyOf(CFG.method));
       if(canAuto) await enrichAll(S.clips.slice());
     })();
   }catch(e){
@@ -2294,9 +2360,11 @@ $('#btn-gotoclips').onclick=()=>go('klip-saya');
 
 /* ---------- mulai ---------- */
 (function init(){
-  const k=lsGet('klipku.gkey');
-  if(k){$('#gkey').value=k;$('#gremember').checked=true;}
-  const gm=lsGet('klipku.gmodel');if(gm&&gm!=='gemini-2.5-flash')$('#gmodel').value=gm;
+  Object.keys(PROV).forEach(id=>{const P=PROV[id];
+    let k=lsGet('klipku.key.'+id)||(id==='gemini'?lsGet('klipku.gkey'):null);
+    if(k){$(P.key).value=k;$(P.rem).checked=true;}
+    let m=lsGet('klipku.model.'+id)||(id==='gemini'?lsGet('klipku.gmodel'):null);
+    if(m&&m!=='gemini-2.5-flash')$(P.model).value=m;});
   S.res=+$('#res').value||720;
   applyMethod();buildStyles();
   const okRec=!!(window.MediaRecorder&&HTMLCanvasElement.prototype.captureStream);
