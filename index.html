@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>KlipKu</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;700&family=Anton&family=Bebas+Neue&family=Montserrat:wght@800&family=Poppins:wght@800&family=Bangers&family=Luckiest+Guy&display=swap">
 <style>
 :root{
   --bg:#0e1115; --panel:#161a20; --panel-2:#1d232b; --line:#29313b;
@@ -283,6 +283,9 @@ button.item{
 .pr-note{color:var(--muted);font-size:13px;text-align:center;margin:16px 8px 22px}
 .pr-cancel{width:100%;border-radius:20px;padding:15px;font-size:16px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}.ring.spin svg{animation:none}}
+#v-editor:not([data-mode=edit]) .grid{display:none}
+#v-editor[data-mode=edit] #rec{display:none}
+.p-sub .row:has(#btn-tr),.p-sub .row:has(#btn-eng),.p-sub>.note{display:none}
 </style>
 </head>
 <body>
@@ -497,6 +500,8 @@ button.item{
             <label for="pos">Posisi vertikal: <b id="v-pos">76</b>%</label>
             <input type="range" id="pos" min="8" max="94" step="1" value="76">
           </div>
+          <label for="fontsel" style="margin-top:10px">Font subtitle</label>
+          <select id="fontsel"><option value="Inter|800">Inter</option><option value="Montserrat|800">Montserrat</option><option value="Poppins|800">Poppins</option><option value="Anton|400">Anton</option><option value="Bebas Neue|400">Bebas Neue</option><option value="Bangers|400">Bangers</option><option value="Luckiest Guy|400">Luckiest Guy</option><option value="Space Grotesk|700">Space Grotesk</option></select>
           <label class="check"><input type="checkbox" id="emoji" checked> Emoji otomatis</label>
           <label class="check"><input type="checkbox" id="caps"> HURUF BESAR</label>
           <div class="full">
@@ -663,7 +668,7 @@ const $=s=>document.querySelector(s);
 const S={file:null,url:null,dur:0,start:0,end:0,segs:[],clips:[],sel:-1,audio:null,env:null,
   track:undefined,input:null,sink:null,vtok:0,
   asr:null,asrModel:'',wLoaded:'',useWorker:false,busy:false,cancel:false,
-  style:'clean',frame:'auto',wpl:3,size:64,pos:76,emoji:true,caps:false,hook:'',hookTitle:false,res:720,n:0,
+  style:'viral',font:'Inter',fw:800,frame:'auto',wpl:3,size:64,pos:76,emoji:true,caps:false,hook:'',hookTitle:false,res:720,n:0,
   cover:'none',cy:84,ch:14};
 
 const src=$('#src'), pc=$('#pc'), pctx=pc.getContext('2d');
@@ -736,6 +741,7 @@ function activeAt(t){
 
 /* ---------- gaya subtitle ---------- */
 const STYLES=[
+  {id:'viral',name:'Viral',d:'Kata penting hijau + zoom'},
   {id:'clean',name:'Bersih',d:'Putih, garis hitam'},
   {id:'pop',name:'Pop',d:'Tebal, kata aktif hijau'},
   {id:'karaoke',name:'Karaoke',d:'Garis bawah kata aktif'},
@@ -760,11 +766,18 @@ function paper(ctx,x,y,w,h,fs,R){
   for(let px=x+w-step;px>x;px-=step) ctx.lineTo(px,y+h+(R()-.5)*2*j);
   ctx.lineTo(x,y+h-R()*j);ctx.closePath();ctx.fill();ctx.restore();
 }
-const FONT=px=>`800 ${px}px Inter,"Space Grotesk",sans-serif`;
+const FONT=px=>`${S.fw} ${px}px "${S.font}",Inter,sans-serif`;
 const EMOFONT=px=>`${px}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+const isKey=w=>{const x=w.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');return (x.length>=6&&!STOP.has(x))||/\d/.test(x)||HOOK.test(x);};
 function paintWord(ctx,o,x,y,fs,on){
   if(o.emo){ctx.font=EMOFONT(fs);ctx.fillText(o.w,x,y);ctx.font=FONT(fs);return;}
   const st=S.style;
+  if(st==='viral'){
+    ctx.save();const z=o.z||1;ctx.translate(x+o.wd/2,y-fs*.32);ctx.scale(z,z);ctx.translate(-(x+o.wd/2),-(y-fs*.32));
+    ctx.shadowColor='rgba(0,0,0,.6)';ctx.shadowOffsetY=fs*.06;ctx.shadowBlur=fs*.12;
+    ctx.lineWidth=fs*.24;ctx.strokeStyle='#000';ctx.strokeText(o.w,x,y);ctx.shadowColor='transparent';
+    ctx.fillStyle=o.k?'#2bff6e':'#fff';ctx.fillText(o.w,x,y);ctx.restore();return;
+  }
   if(st==='clean'){
     ctx.lineWidth=fs*.17;ctx.strokeStyle='#000';ctx.strokeText(o.w,x,y);
     ctx.fillStyle=on?'#ffe14d':'#fff';ctx.fillText(o.w,x,y);
@@ -825,6 +838,8 @@ function drawSub(ctx,W,H,t,o){
   ctx.save();ctx.textBaseline='alphabetic';ctx.textAlign='left';ctx.lineJoin='round';ctx.font=FONT(fs);
   const sp=ctx.measureText(' ').width, maxW=W*.86;
   const all=words.map((w,i)=>({w,wd:ctx.measureText(w).width,i}));
+  let ki=-1,kl=0;words.forEach((w,i)=>{if(isKey(w)&&w.length>kl){kl=w.length;ki=i;}});
+  all.forEach(a=>{if(a.i===ki){a.k=true;const ws=info.chunk.words[a.i],pr=ws&&ws.s!=null?Math.max(0,Math.min(1,(t-ws.s)/.18)):1;a.z=a.i===info.active?1.08+.28*(1-Math.pow(1-pr,3)):1.1;}});
   if(emo) all.push({w:emo,wd:fs*1.1,i:-1,emo:true});
   const tot=all.reduce((a,x)=>a+x.wd,0)+sp*(all.length-1);
   let lines=[all];
@@ -890,7 +905,8 @@ function drawFrame(ctx,W,H,vid,t,o){
   const vw=vw_(vid), vh=vh_(vid);
   if(vid&&vw){
     if(S.frame==='auto'){
-      const fx=o.fx==null?.5:o.fx, k=Math.max(W/vw,H/vh), sw=W/k, sh=H/k;
+      let fx=o.fx==null?.5:o.fx; const k=Math.max(W/vw,H/vh), sw=W/k, sh=H/k;
+      if(o.fxf){const cx=o.fxf(t);fx=Math.max(0,Math.min(1,(cx*vw-sw/2)/Math.max(1,vw-sw)));}
       ctx.drawImage(vid,(vw-sw)*fx,(vh-sh)/2,sw,sh,0,0,W,H);
     }else if(S.frame==='blur'){
       const k=Math.max(54/vw,96/vh), sw=54/k, sh=96/k;
@@ -929,7 +945,7 @@ let rafOn=false;
 function redraw(){
   const has=!!S.url, c=S.clips[S.sel];
   drawFrame(pctx,pc.width,pc.height,has?src:null,has?src.currentTime:0,
-    {sample:S.segs.length===0,clipStart:has?S.start:0,fx:c?c.fx:.5,title:c?c.title:''});
+    {sample:S.segs.length===0,clipStart:has?S.start:0,fx:c?c.fx:.5,fxf:c&&c.track?(tt=>fxAt(c,tt)):null,title:c?c.title:''});
 }
 function previewTick(){
   rafOn=true;redraw();
@@ -949,7 +965,7 @@ function setSource(f){
     try{if(S.input&&S.input.dispose) S.input.dispose();}catch(e){}
     S.vtok++;coverToken++;
     S.file=f;S.url=URL.createObjectURL(f);S.audio=null;S.env=null;S.track=undefined;S.input=null;S.sink=null;
-    S.segs=[];S.clips=[];S.sel=-1;
+    S.segs=[];S.clips=[];S.sel=-1;setMode('gallery');
     src.onloadedmetadata=()=>{
       S.dur=src.duration||0;
       ['#start','#end'].forEach(s=>{$(s).max=S.dur;});
@@ -961,6 +977,59 @@ function setSource(f){
     src.src=S.url;
   });
 }
+function setMode(m){$('#v-editor').dataset.mode=m;$('#v-editor .ed-head h1').textContent=m==='edit'?'Edit klip':'Klip baru';window.scrollTo(0,0);if(m!=='edit')src.pause();}
+/* Pelacak pembicara: cari gerakan terbesar (mulut, kepala, tangan) tiap ~0.8 detik, ambil satu orang saja,
+   tahan di orang terakhir yang bicara saat hening, dan geser halus hanya jika pembicara benar-benar pindah. */
+const TV2=document.createElement('video');TV2.muted=true;TV2.playsInline=true;TV2.preload='auto';
+function seek2(t){return new Promise(res=>{const d=()=>{TV2.removeEventListener('seeked',d);clearTimeout(to);res();};const to=setTimeout(d,4000);TV2.addEventListener('seeked',d);TV2.currentTime=Math.max(0,Math.min(t,(TV2.duration||t)-.05));});}
+function gray2(){gctx.drawImage(TV2,0,0,64,36);const d=gctx.getImageData(0,0,64,36).data,g=new Uint8Array(64*36);for(let i=0;i<g.length;i++)g[i]=(d[i*4]*3+d[i*4+1]*6+d[i*4+2])/10;return g;}
+const smooth=x=>x*x*(3-2*x);
+function fxAt(c,t){
+  const tr=c.track;if(!tr||!tr.length)return .5;
+  let i=0;while(i+1<tr.length&&tr[i+1].t<=t)i++;
+  const cur=tr[i],prev=tr[Math.max(0,i-1)];
+  return prev.x+(cur.x-prev.x)*smooth(Math.max(0,Math.min(1,(t-cur.t)/.45)));
+}
+async function buildTrack(c,say){
+  if(c.track||!S.url) return;
+  const tok=S.vtok;
+  try{
+    if(TV2.dataset.u!==S.url){TV2.src=S.url;TV2.dataset.u=S.url;await new Promise(r=>{TV2.onloadedmetadata=r;TV2.onerror=r;});}
+    const raw=[];let n=0;const total=Math.ceil((c.end-c.start)/.8);
+    for(let t=c.start;t<c.end;t+=.8){
+      if(S.vtok!==tok) return;
+      if(say&&n%6===0) say('Melacak pembicara… '+Math.round(n/total*100)+'%');n++;
+      await seek2(t);const a=gray2();await seek2(t+.25);const b=gray2();
+      const col=new Float64Array(64);let tot=0;
+      for(let y=0;y<26;y++)for(let x=0;x<64;x++){const df=Math.abs(a[y*64+x]-b[y*64+x]);if(df>12){col[x]+=df;tot+=df;}}
+      const sm=new Float64Array(64);let pk=0;
+      for(let x=0;x<64;x++){let v=0;for(let k=-4;k<=4;k++)v+=col[Math.max(0,Math.min(63,x+k))];sm[x]=v;if(sm[x]>sm[pk])pk=x;}
+      raw.push({t,x:tot>350&&sm[pk]>250?(pk+.5)/64:null});
+    }
+    let last=(raw.find(r=>r.x!=null)||{x:.5}).x;
+    const tr=[{t:c.start,x:last}];let cand=null,cn=0;
+    raw.forEach(r=>{
+      if(r.x==null||Math.abs(r.x-last)<.12){cand=null;cn=0;return;}
+      if(cand!=null&&Math.abs(r.x-cand)<.12){cn++;}else{cand=r.x;cn=1;}
+      if(cn>=2){last=cand;tr.push({t:r.t,x:last});cand=null;cn=0;}
+    });
+    c.track=tr;
+  }catch(e){}
+  if(S.clips[S.sel]===c) redraw();
+}
+async function prepClip(c){
+  if(!c||c._prep) return;c._prep=true;const tok=S.vtok;
+  try{
+    if(!hasText(c)&&!S.busy&&CFG.method!=='manual'){msg('#tr-msg','Menulis subtitle otomatis…');await transcribeRange(c.start,c.end,m=>msg('#tr-msg',m));renderSegs();redrawAll();}
+    if(S.vtok!==tok) return;
+    if(!c.title&&hasText(c)){const m=await makeMeta(c);if(m){Object.assign(c,m);if(S.clips[S.sel]===c)fillMeta(c);renderGallery();}}
+    msg('#tr-msg','Subtitle otomatis siap. Bisa diubah di daftar baris.','ok');
+  }catch(e){c._prep=false;msg('#tr-msg',niceErr(e),'bad');}
+  await buildTrack(c,m=>msg('#tr-msg',m));
+  if(S.clips[S.sel]===c) msg('#tr-msg','Subtitle dan bingkai pembicara siap.','ok');
+}
+$('#btn-back').addEventListener('click',e=>{if($('#v-editor').dataset.mode==='edit'){e.stopImmediatePropagation();setMode('gallery');}},true);
+$('#fontsel').onchange=e=>{const [f,w]=e.target.value.split('|');S.font=f;S.fw=+w;document.fonts.load(w+' 40px "'+f+'"').then(()=>{redrawAll();repaintStyles();});};
 const isVideo=f=>/^video\//.test(f.type)||/\.(mp4|mov|webm|mkv|m4v)$/i.test(f.name);
 async function loadFile(f,auto){
   if(!f) return;
@@ -995,7 +1064,7 @@ function selectClip(i,o){
   const fx=Math.round((c.fx==null?.5:c.fx)*100);
   $('#focus').value=fx;$('#v-focus').textContent=fx;
   fillMeta(c);renderGallery();renderSegs();redraw();
-  if(o.scroll) $('#edit-top').scrollIntoView({behavior:'smooth',block:'start'});
+  if(o.scroll||o.play){setMode('edit');prepClip(c);}
   if(o.play) setTimeout(()=>{src.currentTime=S.start;const p=src.play();if(p&&p.catch)p.catch(()=>{});},350);
 }
 
@@ -1438,7 +1507,8 @@ async function renderClip(c,label){
   const parts=[];rec.ondataavailable=e=>{if(e.data&&e.data.size)parts.push(e.data);};
   const stopped=new Promise(r=>{rec.onstop=r;});
   await actx.resume();
-  const o={clipStart:c.start,fx:c.fx,title:c.title};
+  await buildTrack(c,m=>rmsg(label+' · '+m));
+  const o={clipStart:c.start,fx:c.fx,fxf:c.track?(tt=>fxAt(c,tt)):null,title:c.title};
   drawFrame(rctx,W,H,v,c.start,o);
   rec.start(500);await v.play();
   await new Promise(res=>{
@@ -1628,7 +1698,7 @@ $('#styles').onclick=e=>{
 const bindRange=(id,key,out)=>{$('#'+id).oninput=e=>{S[key]=+e.target.value;if(out)$('#'+out).textContent=e.target.value;redrawAll();};};
 bindRange('wpl','wpl','v-wpl');bindRange('size','size','v-size');bindRange('pos','pos','v-pos');
 bindRange('cy','cy','v-cy');bindRange('ch','ch','v-ch');
-$('#focus').oninput=e=>{
+$('#focus').oninput=e=>{const cc=S.clips[S.sel];if(cc)cc.track=null;
   const c=S.clips[S.sel];$('#v-focus').textContent=e.target.value;
   if(c){c.fx=+e.target.value/100;}
   redrawAll();
