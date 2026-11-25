@@ -313,6 +313,12 @@ button.item{
   #v-editor:not([data-mode=edit]) #rec>*{flex:0 0 auto}
   #v-editor:not([data-mode=edit]) #rec #cands{flex:1 1 auto;min-height:0;overflow-y:auto;padding:2px 6px 8px 0;overscroll-behavior:contain}
 }
+.gem{margin:4px 0 16px;border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:rgba(255,255,255,.03)}
+.gem summary{cursor:pointer;font-weight:700;font-size:14px;color:#fff}
+.gem p,.gem li{font-size:13px;line-height:1.5;color:#c3d6cb;margin:10px 0 0}
+.gem ol{padding-left:20px;margin:6px 0 0}
+.gem a,.sheet .hint a{color:#4ade80;text-decoration:underline}
+.sheet:has(.gem[open]){max-height:88vh;overflow-y:auto}
 </style>
 </head>
 <body>
@@ -427,7 +433,7 @@ button.item{
           <button class="btn" id="btn-split" type="button">Bagi rata</button>
           <button class="btn" id="g-cancel" type="button" hidden>Batal</button>
         </div>
-        <label class="check" style="margin-top:10px"><input type="checkbox" id="autometa" checked> Otomatis buat subtitle, judul &amp; hashtag untuk 6 klip teratas setelah analisis</label>
+        <label class="check" style="margin-top:10px"><input type="checkbox" id="autometa" checked> Otomatis buat subtitle, judul &amp; hashtag untuk semua klip setelah analisis (klip yang kamu buka diprioritaskan)</label>
         <div class="bar" aria-hidden="true"><i id="gprog"></i></div>
         <p class="msg" id="rec-msg" role="status"></p>
         <p class="empty" id="rec-empty">Belum ada rekomendasi. Pilih video dulu.</p>
@@ -670,6 +676,7 @@ button.item{
       <input type="password" id="gkey" autocomplete="off" placeholder="Tempel kunci API Gemini" aria-label="Kunci API Gemini">
       <input type="text" id="gmodel" value="gemini-2.5-flash" aria-label="Nama model Gemini">
       <label class="check"><input type="checkbox" id="gremember"> Ingat kunci di browser ini</label>
+      <p class="hint">Belum punya kunci? Buat gratis di <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>. Langkah lengkap ada di Cara pakai.</p>
     </div>
   </div>
   <button class="done" type="button" data-close>Selesai</button>
@@ -684,6 +691,18 @@ button.item{
     <li><span class="n">3</span><span>Klik kartu untuk memutar dan mengedit: gaya subtitle, ukuran, posisi, dan format video (Auto Frame, Blur BG, Original).</span></li>
     <li><span class="n">4</span><span>Tekan tombol hati pada klip yang kamu suka, lalu Render. Hasilnya otomatis ada di Klip saya untuk diunduh atau dihapus.</span></li>
   </ol>
+  <details class="gem">
+    <summary>Subtitle lebih cepat dengan kunci API Gemini (opsional)</summary>
+    <p>Secara bawaan subtitle dibuat di perangkatmu sendiri (Whisper), aman tapi bisa lama. Dengan kunci Gemini milikmu sendiri, subtitle satu klip selesai dalam hitungan detik.</p>
+    <ol>
+      <li>Buka <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> dan masuk dengan akun Google.</li>
+      <li>Ketuk <b>Create API key</b>, pilih atau buat proyek, lalu salin kunci yang muncul (diawali <b>AIza</b>).</li>
+      <li>Di aplikasi ini buka <b>Pengaturan</b>, lalu <b>Durasi, mesin subtitle, bahasa</b>, pilih <b>Gemini</b>.</li>
+      <li>Tempel kunci di kolom yang tersedia. Centang <b>Ingat kunci di browser ini</b> kalau tidak mau menempel lagi.</li>
+      <li>Selesai. Buat subtitle lagi, dan sekarang memakai Gemini.</li>
+    </ol>
+    <p><b>Perlu diketahui:</b> kunci itu milikmu pribadi, jangan dibagikan ke orang lain atau ditempel di tempat umum. Pemakaian dihitung di akun Google-mu, ada jatah gratis dengan batas harian yang bisa berubah. Audio klip dikirim ke Google untuk diubah jadi teks. Kalau videomu bersifat pribadi, pakai Whisper saja.</p>
+  </details>
   <button class="done" type="button" data-close>Mengerti</button>
 </div>
 
@@ -1545,18 +1564,20 @@ function blobB64(blob){return new Promise((res,rej)=>{const r=new FileReader();r
 /* ---------- transkripsi: Whisper berjalan di worker supaya halaman tidak membeku ---------- */
 const WORKER_SRC=[
 "import {pipeline} from '"+TF_URL+"';",
-"let asr=null,model='';",
+"let asr=null,model='',dev='wasm';",
+"const pcb=p=>{if(p.status==='progress'&&p.progress!=null)self.postMessage({type:'progress',progress:p.progress});};",
+"const mk=(mdl,gpu)=>pipeline('automatic-speech-recognition','Xenova/whisper-'+mdl,gpu?{progress_callback:pcb,device:'webgpu',dtype:{encoder_model:'fp32',decoder_model_merged:'q4'}}:{progress_callback:pcb});",
 "self.onmessage=async e=>{",
 " const m=e.data;",
 " try{",
 "  if(m.type==='load'){",
 "   if(!asr||model!==m.model){",
-"    asr=await pipeline('automatic-speech-recognition','Xenova/whisper-'+m.model,{progress_callback:p=>{if(p.status==='progress'&&p.progress!=null)self.postMessage({type:'progress',progress:p.progress});}});",
+"    try{ if(!self.navigator||!navigator.gpu) throw 0; asr=await mk(m.model,true); dev='webgpu'; }catch(x){ asr=await mk(m.model,false); dev='wasm'; }",
 "    model=m.model;",
 "   }",
 "   self.postMessage({type:'ready',id:m.id});",
 "  }else if(m.type==='run'){",
-"   const out=await asr(m.pcm,m.opt);",
+"   let out; try{ out=await asr(m.pcm,m.opt); }catch(er){ if(dev!=='webgpu') throw er; asr=await mk(model,false); dev='wasm'; out=await asr(m.pcm,m.opt); }",
 "   self.postMessage({type:'result',id:m.id,chunks:(out.chunks||[]).map(c=>({t:c.timestamp,text:c.text}))});",
 "  }",
 " }catch(err){self.postMessage({type:'error',id:m.id,message:String(err&&err.message||err)});}",
@@ -2249,7 +2270,7 @@ async function runPipeline({file}){
       await buildCovers();
       if(S.vtok!==tok) return;
       const canAuto=$('#autometa').checked&&CFG.method!=='manual'&&!(CFG.method==='gemini'&&!$('#gkey').value.trim());
-      if(canAuto) await enrichAll(S.clips.slice(0,6));
+      if(canAuto) await enrichAll(S.clips.slice());
     })();
   }catch(e){
     if(!alive()) return;
