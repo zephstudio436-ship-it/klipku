@@ -286,6 +286,19 @@ button.item{
 #v-editor:not([data-mode=edit]) .grid{display:none}
 #v-editor[data-mode=edit] #rec{display:none}
 .p-sub .row:has(#btn-tr),.p-sub .row:has(#btn-eng),.p-sub>.note{display:none}
+#src,#btn-other{display:none!important}
+.panel.fold>h2{cursor:pointer;display:flex;justify-content:space-between;align-items:center;margin-bottom:0}
+.panel.fold>h2::after{content:'▾';font-size:14px}
+.panel.fold.closed>h2::after{content:'▸'}
+.panel.fold:not(.closed)>h2{margin-bottom:14px}
+.panel.fold.closed>*:not(h2){display:none!important}
+@media (max-width:1040px){
+  #v-editor .p-prev{order:1}#v-editor .p-meta{order:2}#v-editor .p-src{order:3}#v-editor .p-style{order:4}#v-editor .p-sub{order:5}#v-editor .p-exp{order:6}#v-editor .p-frame{order:7}#v-editor .p-cover{order:8}
+  #v-editor .btn,#v-editor select,#v-editor input[type=text],#v-editor textarea{min-height:44px}
+  #v-editor input[type=range]{height:32px}
+  #v-editor .panel{padding:14px}
+  #v-editor .p-prev canvas{max-width:min(100%,360px)!important;margin:0 auto;display:block}
+}
 </style>
 </head>
 <body>
@@ -412,7 +425,7 @@ button.item{
     <!-- Kolom kiri: sumber, judul, subtitle -->
     <div class="col">
       <section class="panel p-src" aria-labelledby="h-src">
-        <h2 id="h-src">Video dan potongan</h2>
+        <h2 id="h-src">Potongan klip (mulai &amp; selesai)</h2>
         <div class="dz" id="dz" tabindex="0" role="button" aria-label="Pilih atau seret video ke sini">
           <strong>Seret video ke sini, atau klik untuk memilih</strong>
           <small>MP4 (H.264/AAC) paling aman. Video panjang boleh.</small>
@@ -906,8 +919,9 @@ function drawFrame(ctx,W,H,vid,t,o){
   if(vid&&vw){
     if(S.frame==='auto'){
       let fx=o.fx==null?.5:o.fx; const k=Math.max(W/vw,H/vh), sw=W/k, sh=H/k;
-      if(o.fxf){const cx=o.fxf(t);fx=Math.max(0,Math.min(1,(cx*vw-sw/2)/Math.max(1,vw-sw)));}
-      ctx.drawImage(vid,(vw-sw)*fx,(vh-sh)/2,sw,sh,0,0,W,H);
+      let sx=(vw-sw)*fx,sy=(vh-sh)/2,cw=sw,ch=sh;
+      if(o.fxf){const f=o.fxf(t),z=S.cover==='none'?f.z:1;cw=sw/z;ch=sh/z;sx=Math.max(0,Math.min(vw-cw,f.x*vw-cw/2));sy=Math.max(0,Math.min(vh-ch,f.y*vh-ch*.4));}
+      ctx.drawImage(vid,sx,sy,cw,ch,0,0,W,H);
     }else if(S.frame==='blur'){
       const k=Math.max(54/vw,96/vh), sw=54/k, sh=96/k;
       bctx.drawImage(vid,(vw-sw)/2,(vh-sh)/2,sw,sh,0,0,54,96);
@@ -985,13 +999,13 @@ function seek2(t){return new Promise(res=>{const d=()=>{TV2.removeEventListener(
 function gray2(){gctx.drawImage(TV2,0,0,64,36);const d=gctx.getImageData(0,0,64,36).data,g=new Uint8Array(64*36);for(let i=0;i<g.length;i++)g[i]=(d[i*4]*3+d[i*4+1]*6+d[i*4+2])/10;return g;}
 const smooth=x=>x*x*(3-2*x);
 function fxAt(c,t){
-  const tr=c.track;if(!tr||!tr.length)return .5;
+  const tr=c.track;if(!tr||!tr.length)return {x:.5,y:.45,z:1};
   let i=0;while(i+1<tr.length&&tr[i+1].t<=t)i++;
-  const cur=tr[i],prev=tr[Math.max(0,i-1)];
-  return prev.x+(cur.x-prev.x)*smooth(Math.max(0,Math.min(1,(t-cur.t)/.45)));
+  const cur=tr[i],prev=tr[Math.max(0,i-1)],k=smooth(Math.max(0,Math.min(1,(t-cur.t)/.6)));
+  return {x:prev.x+(cur.x-prev.x)*k,y:prev.y+(cur.y-prev.y)*k,z:c.zoom||1};
 }
-async function buildTrack(c,say){
-  if(c.track||!S.url) return;
+async function trackMotion(c,say){
+  if(!S.url) return;
   const tok=S.vtok;
   try{
     if(TV2.dataset.u!==S.url){TV2.src=S.url;TV2.dataset.u=S.url;await new Promise(r=>{TV2.onloadedmetadata=r;TV2.onerror=r;});}
@@ -1013,13 +1027,88 @@ async function buildTrack(c,say){
       if(cand!=null&&Math.abs(r.x-cand)<.12){cn++;}else{cand=r.x;cn=1;}
       if(cn>=2){last=cand;tr.push({t:r.t,x:last});cand=null;cn=0;}
     });
-    c.track=tr;
+    return tr;
   }catch(e){}
-  if(S.clips[S.sel]===c) redraw();
+}
+let FD=null;
+async function getFD(){
+  if(FD===false) return null; if(FD) return FD;
+  try{
+    const V='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14', m=await import(V+'/+esm');
+    const fs=await m.FilesetResolver.forVisionTasks(V+'/wasm');
+    FD=await m.FaceDetector.createFromOptions(fs,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite',delegate:'CPU'},runningMode:'IMAGE',minDetectionConfidence:.45});
+  }catch(e){FD=false;return null;}
+  return FD;
+}
+const dcv=document.createElement('canvas'),dctx=dcv.getContext('2d');
+function findFaces(fd,el){
+  const vw=el.videoWidth||el.width,vh=el.videoHeight||el.height,out=[];
+  const tiles=vw/vh>1.2?[0,.25,.5]:[0],tw=vw/(tiles.length>1?2:1),sc=Math.min(1,520/tw);
+  dcv.width=Math.round(tw*sc);dcv.height=Math.round(vh*sc);
+  tiles.forEach(o=>{
+    dctx.drawImage(el,o*vw,0,tw,vh,0,0,dcv.width,dcv.height);
+    let r;try{r=fd.detect(dcv);}catch(e){return;}
+    (r.detections||[]).forEach(d=>{const b=d.boundingBox;
+      const f={cx:(o*vw+(b.originX+b.width/2)/sc)/vw,cy:(b.originY+b.height/2)/sc/vh,h:b.height/sc/vh,w:b.width/sc/vw,m:0};
+      if(!out.some(q=>Math.abs(q.cx-f.cx)<.04&&Math.abs(q.cy-f.cy)<.08)) out.push(f);});
+  });
+  return out;
+}
+const mcv=document.createElement('canvas');mcv.width=256;mcv.height=144;const mctx=mcv.getContext('2d',{willReadFrequently:true});
+function gray3(){mctx.drawImage(TV2,0,0,256,144);const d=mctx.getImageData(0,0,256,144).data,g=new Uint8Array(256*144);for(let i=0;i<g.length;i++)g[i]=(d[i*4]*3+d[i*4+1]*6+d[i*4+2])/10;return g;}
+function faceMotion(a,b,f){
+  const x0=Math.max(0,Math.floor((f.cx-f.w*.8)*256)),x1=Math.min(256,Math.ceil((f.cx+f.w*.8)*256)),
+        y0=Math.max(0,Math.floor((f.cy-f.h*.2)*144)),y1=Math.min(144,Math.ceil((f.cy+f.h*.9)*144));
+  let sum=0,n=0;for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){const d=Math.abs(a[y*256+x]-b[y*256+x]);if(d>10)sum+=d;n++;}
+  return n?sum/n:0;
+}
+async function trackFaces(c,say){
+  const fd=await getFD();if(!fd) return null;
+  if(TV2.dataset.u!==S.url){TV2.src=S.url;TV2.dataset.u=S.url;await new Promise(r=>{TV2.onloadedmetadata=r;TV2.onerror=r;});}
+  const tok=S.vtok,samples=[],total=Math.ceil((c.end-c.start)/.8);let n=0;
+  for(let t=c.start;t<c.end;t+=.8){
+    if(S.vtok!==tok) return null;
+    if(say&&n%5===0) say('Mencari pembicara… '+Math.round(n/total*100)+'%');n++;
+    await seek2(t);const a=gray3(),faces=findFaces(fd,TV2);
+    await seek2(t+.25);const b=gray3();
+    faces.forEach(f=>{f.m=faceMotion(a,b,f);});
+    samples.push({t,faces});
+  }
+  let cur=null,cand=null,cn=0;const tr=[],hs=[];
+  const push=(t,f)=>{tr.push({t,x:f.cx,y:f.cy});hs.push(f.h);};
+  samples.forEach(s=>{
+    if(!s.faces.length) return;
+    const best=s.faces.slice().sort((p,q)=>q.m-p.m||q.h-p.h)[0];
+    if(!cur){cur=best;push(c.start,best);return;}
+    const same=s.faces.find(f=>Math.abs(f.cx-cur.cx)<.07);
+    if(best.m>.8&&best!==same&&best.m>(same?same.m*1.3:0)){
+      if(cand&&Math.abs(cand.cx-best.cx)<.07) cn++; else {cand=best;cn=1;}
+      if(cn>=2){cur=best;push(s.t,best);cand=null;cn=0;}
+    }else{
+      cand=null;cn=0;
+      if(same){cur=same;const l=tr[tr.length-1];if(Math.abs(same.cx-l.x)>.05||Math.abs(same.cy-l.y)>.08) push(s.t,same);}
+    }
+  });
+  if(!tr.length) return null;
+  hs.sort((a,b)=>a-b);c.zoom=Math.max(1,Math.min(2.4,.26/(hs[hs.length>>1]||.26)));
+  return tr;
+}
+async function buildTrack(c,say){
+  if(c.track||!S.url||c._bt) return;c._bt=true;const tok=S.vtok;
+  let tr=null;try{tr=await trackFaces(c,say);}catch(e){}
+  if(S.vtok!==tok){c._bt=false;return;}
+  if(!tr||!tr.length){c.zoom=1;tr=await trackMotion(c,say);if(tr) tr=tr.map(p=>({t:p.t,x:p.x,y:.5}));}
+  if(tr&&tr.length) c.track=tr;
+  c._bt=false;if(S.clips[S.sel]===c) redraw();
 }
 async function prepClip(c){
   if(!c||c._prep) return;c._prep=true;const tok=S.vtok;
   try{
+    if(S.busy&&CFG.method!=='manual'&&!(c.title&&hasText(c))){
+      S.prio=c;msg('#tr-msg','Menunggu antrean, klip ini diprioritaskan…');
+      while(S.busy&&S.vtok===tok&&!(c.title&&hasText(c))) await new Promise(r=>setTimeout(r,600));
+      renderSegs();redrawAll();if(S.clips[S.sel]===c) fillMeta(c);
+    }
     if(!hasText(c)&&!S.busy&&CFG.method!=='manual'){msg('#tr-msg','Menulis subtitle otomatis…');await transcribeRange(c.start,c.end,m=>msg('#tr-msg',m));renderSegs();redrawAll();}
     if(S.vtok!==tok) return;
     if(!c.title&&hasText(c)){const m=await makeMeta(c);if(m){Object.assign(c,m);if(S.clips[S.sel]===c)fillMeta(c);renderGallery();}}
@@ -1028,6 +1117,7 @@ async function prepClip(c){
   await buildTrack(c,m=>msg('#tr-msg',m));
   if(S.clips[S.sel]===c) msg('#tr-msg','Subtitle dan bingkai pembicara siap.','ok');
 }
+[['.p-sub',1],['.p-style',0],['.p-cover',1],['.p-frame',1],['.p-src',0]].forEach(([q,cl])=>{const pn=document.querySelector(q),h=pn&&pn.querySelector('h2');if(!h)return;pn.classList.add('fold');if(cl)pn.classList.add('closed');h.onclick=()=>pn.classList.toggle('closed');});
 $('#btn-back').addEventListener('click',e=>{if($('#v-editor').dataset.mode==='edit'){e.stopImmediatePropagation();setMode('gallery');}},true);
 $('#fontsel').onchange=e=>{const [f,w]=e.target.value.split('|');S.font=f;S.fw=+w;document.fonts.load(w+' 40px "'+f+'"').then(()=>{redrawAll();repaintStyles();});};
 const isVideo=f=>/^video\//.test(f.type)||/\.(mp4|mov|webm|mkv|m4v)$/i.test(f.name);
@@ -1136,7 +1226,7 @@ function paintCover(c){
   if(!c.cv) return;
   const cv=c.cv, ctx=cv.getContext('2d'), W=cv.width, H=cv.height;
   if(c.thumb){
-    drawFrame(ctx,W,H,c.thumb,c.start+1,{sample:true,info:coverInfo(c),clipStart:c.start,fx:c.fx,noHook:true});
+    drawFrame(ctx,W,H,c.thumb,c.start+1,{sample:true,info:coverInfo(c),clipStart:c.start,fx:c.fx,fxf:c.track?(tt=>fxAt(c,tt)):(c.cf?(()=>c.cf):null),noHook:true});
   }else{
     const g=ctx.createLinearGradient(0,0,W,H);g.addColorStop(0,'#1c2a33');g.addColorStop(1,'#0e1418');
     ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
@@ -1211,6 +1301,7 @@ async function buildCovers(){
           const th=document.createElement('canvas');th.height=360;th.width=Math.max(2,Math.round(360*(TV.videoWidth||16)/(TV.videoHeight||9)));
           th.getContext('2d').drawImage(TV,0,0,th.width,th.height);c.thumb=th;
         }
+        if(k===0){try{const fd=await getFD();if(fd){const fs=findFaces(fd,c.thumb);if(fs.length){const f=fs.sort((p,q)=>q.h-p.h)[0];c.cf={x:f.cx,y:f.cy,z:Math.max(1,Math.min(2.4,.26/f.h))};}}}catch(e){}}
         const a=grabGray();
         await seekTV(t+.4);
         const b=grabGray();
@@ -1592,6 +1683,7 @@ $('#end').oninput=e=>{
   const b=+e.target.value;setRange(Math.min(S.start,b-.5),b);
   syncSel();src.currentTime=Math.max(S.start,S.end-.5);renderSegs();
 };
+src.addEventListener('seeked',()=>{if(src.paused)redraw();});
 src.addEventListener('play',()=>{if(src.currentTime<S.start||src.currentTime>=S.end)src.currentTime=S.start;if(!rafOn)previewTick();});
 src.addEventListener('timeupdate',()=>{
   if(!src.paused&&src.currentTime>=S.end){src.pause();src.currentTime=S.start;}
@@ -1989,6 +2081,7 @@ async function enrichAll(list){
   try{
     for(let i=0;i<list.length;i++){
       if(S.cancel||S.vtok!==tok) break;
+      if(S.prio){const k=list.indexOf(S.prio);if(k>i){list.splice(k,1);list.splice(i,0,S.prio);}else if(k<0&&S.clips.includes(S.prio)){list.splice(i,0,S.prio);}S.prio=null;}
       const c=list[i], n=S.clips.indexOf(c)+1;
       c.status='Menulis subtitle…';renderGallery();
       try{
